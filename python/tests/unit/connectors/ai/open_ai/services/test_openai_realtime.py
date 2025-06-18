@@ -30,6 +30,7 @@ from openai.types.beta.realtime import (
     InputAudioBufferCommittedEvent,
     InputAudioBufferSpeechStartedEvent,
     RealtimeResponse,
+    RealtimeResponseUsage,
     RealtimeServerEvent,
     ResponseAudioDeltaEvent,
     ResponseAudioDoneEvent,
@@ -37,6 +38,7 @@ from openai.types.beta.realtime import (
     ResponseCancelEvent,
     ResponseCreatedEvent,
     ResponseCreateEvent,
+    ResponseDoneEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
     ResponseFunctionCallArgumentsDoneEvent,
     ResponseOutputItemAddedEvent,
@@ -415,6 +417,31 @@ def test_create_openai_realtime_event(
             [RealtimeEvent],
             id="other",
         ),
+        param(
+            ResponseDoneEvent(
+                event_id="event_id",
+                response=RealtimeResponse(),
+                type="response.done",
+            ),
+            [RealtimeEvent],
+            id="response_done",
+        ),
+        param(
+            ResponseDoneEvent(
+                event_id="event_id",
+                response=RealtimeResponse(
+                    id="resp_id",
+                    usage=RealtimeResponseUsage(
+                        input_tokens=100,
+                        output_tokens=50,
+                        total_tokens=150
+                    )
+                ),
+                type="response.done",
+            ),
+            [RealtimeEvent],
+            id="response_done_with_usage",
+        ),
     ],
 )
 async def test_parse_event(OpenAIWebsocket, event: RealtimeServerEvent, expected_type: list[type]):
@@ -422,6 +449,76 @@ async def test_parse_event(OpenAIWebsocket, event: RealtimeServerEvent, expected
     async for result in OpenAIWebsocket._parse_event(event):
         assert isinstance(result, expected_type[iter])
         iter += 1
+
+
+@mark.asyncio
+async def test_response_done_with_usage_emits_metrics(OpenAIWebsocket, caplog):
+    """Test that response.done events with usage data emit OTEL metrics and log usage."""
+    import logging
+    
+    # Ensure we capture INFO level logs
+    caplog.set_level(logging.INFO)
+    
+    # Create event with usage data
+    event = ResponseDoneEvent(
+        event_id="test_event",
+        response=RealtimeResponse(
+            id="resp_123",
+            usage=RealtimeResponseUsage(
+                input_tokens=100,
+                output_tokens=50,
+                total_tokens=150
+            )
+        ),
+        type="response.done"
+    )
+    
+    # Process event
+    events = []
+    async for result in OpenAIWebsocket._parse_event(event):
+        events.append(result)
+        
+    # Verify event was yielded
+    assert len(events) == 1
+    assert isinstance(events[0], RealtimeEvent)
+    
+    # Verify usage was logged (indicating metrics code path was executed)
+    usage_logs = [record for record in caplog.records if "OpenAI Realtime usage:" in record.message]
+    assert len(usage_logs) == 1
+    assert "input_tokens" in usage_logs[0].message
+    assert "output_tokens" in usage_logs[0].message
+    assert "total_tokens" in usage_logs[0].message
+
+
+@mark.asyncio
+async def test_response_done_without_usage_no_metrics(OpenAIWebsocket, caplog):
+    """Test that response.done events without usage data do not log usage."""
+    import logging
+    
+    # Ensure we capture INFO level logs
+    caplog.set_level(logging.INFO)
+    
+    # Create event WITHOUT usage data
+    event = ResponseDoneEvent(
+        event_id="test_event",
+        response=RealtimeResponse(
+            id="resp_123"
+        ),
+        type="response.done"
+    )
+    
+    # Process event
+    events = []
+    async for result in OpenAIWebsocket._parse_event(event):
+        events.append(result)
+        
+    # Verify event was yielded
+    assert len(events) == 1
+    assert isinstance(events[0], RealtimeEvent)
+    
+    # Verify no usage was logged (metrics code path not executed)
+    usage_logs = [record for record in caplog.records if "OpenAI Realtime usage:" in record.message]
+    assert len(usage_logs) == 0
 
 
 async def test_update_session(OpenAIWebsocket, kernel):

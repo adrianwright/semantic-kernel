@@ -2,6 +2,12 @@
 
 import asyncio
 import logging
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[3]))
+
+print("\n".join(sys.path))
 
 from samples.concepts.realtime.utils import AudioPlayerWebRTC, AudioRecorderWebRTC, check_audio_devices
 from semantic_kernel.connectors.ai.open_ai import (
